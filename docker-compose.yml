@@ -1,0 +1,13 @@
+services:
+  mas:
+    build: .
+    image: multi-agent-supervisor:latest
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    command: ["What is the capital of the country directly south of Norway?"]
+
+  smoke:
+    build: .
+    image: multi-agent-supervisor:latest
+    entrypoint: ["python", "-m", "benchmarks.smoke_parallel"]
+    command: ["--delay", "0.5", "--repeats", "3"]

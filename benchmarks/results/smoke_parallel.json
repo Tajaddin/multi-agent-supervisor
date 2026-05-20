@@ -1,0 +1,9 @@
+{
+  "delay_per_llm_call_seconds": 0.5,
+  "n_sub_questions": 3,
+  "total_llm_calls_per_query": 8,
+  "repeats": 3,
+  "sequential_mean_seconds": 4.004,
+  "parallel_mean_seconds": 2.014,
+  "speedup": 1.99
+}
