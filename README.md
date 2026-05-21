@@ -1,6 +1,6 @@
 # multi-agent-supervisor
 
-> LangGraph supervisor that fans out specialist agents in parallel via Send. **1.99x faster than the sequential multi-agent baseline** on a 3-sub-question workload, reproducible in 6 seconds with no API key.
+> LangGraph supervisor that fans out specialist agents in parallel via Send. **Live on Haiku 4.5: 1.31x speedup vs sequential multi-agent on HotpotQA**. Smoke benchmark with deterministic latency: 1.99x. Both reproducible in seconds.
 
 [![ci](https://github.com/Tajaddin/multi-agent-supervisor/actions/workflows/ci.yml/badge.svg)](https://github.com/Tajaddin/multi-agent-supervisor/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -9,16 +9,20 @@
 
 ## Hero metrics
 
-Reproducible in 6 seconds: `python -m benchmarks.smoke_parallel --delay 0.5 --repeats 3`
+Two benchmarks, both reproducible:
+- `python -m benchmarks.smoke_parallel --delay 0.5 --repeats 3` (6 seconds, no API key, deterministic)
+- `python -m benchmarks.hotpotqa_eval --n 5 --modes sequential parallel` (90 seconds, needs ANTHROPIC_API_KEY, ~$0.20)
 
-| Workload | Sequential multi-agent | Parallel supervisor | Speedup |
+| Source | Sequential mean | Parallel mean | Speedup |
 |---|---:|---:|---:|
-| 3 sub-questions, 0.5s per LLM call (Haiku-4.5-shaped) | **4.00s** | **2.01s** | **1.99x** |
-| 8 LLM calls per query (1 planner + 3 analyzers + 3 verifiers + 1 synth) | identical work, serial | identical work, fanned out | same correctness, half the wall-clock |
+| **Live on Haiku 4.5 + Wikipedia** (HotpotQA, 5 questions) | **4.25s** | **3.25s** | **1.31x** |
+| Smoke benchmark (3 sub-questions, 0.5s per LLM call, no network) | 4.00s | 2.01s | 1.99x |
 
-Why this is real, not handwaved: the supervisor and the sequential baseline call **identical specialist functions on identical state**. The only difference is the graph topology. The 58-test suite includes `test_supervisor_faster_than_sequential_under_sleep`, which fails CI if the Send fan-out stops actually concurrent.
+The smoke run is the theoretical ceiling: 4 sequential stages of 0.5s each. The live run shows what real-world latency variance does to the deal: per-question speedup ranges from 1.05x to 1.45x because each layer's slowest specialist becomes the bottleneck, and Claude's TTFT jitter is ~200-500ms.
 
-The math: 8 calls × 0.5s = 4.00s serial. Parallel collapses to `planner + max(analyzers) + max(verifiers) + synth` = 4 × 0.5s = 2.00s. We measure 2.01s — overhead under 1%.
+Both benchmarks confirm correctness parity: the supervisor and the sequential baseline call **identical specialist functions on identical state**. The 58-test suite includes `test_supervisor_faster_than_sequential_under_sleep`, which fails CI if the Send fan-out stops actually concurrent.
+
+Live HotpotQA F1 on the 5-question subset was 0.036 (mean) with 20% contains-gold rate. Multi-hop accuracy is bounded by retrieval quality, not the orchestration; swap the `WikipediaSearcher` for Tavily / Brave Search to lift it. The orchestration speedup (1.31x) is independent of the retrieval backend.
 
 ## Architecture
 
