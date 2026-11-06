@@ -10,10 +10,16 @@ StaticSearcher. They prove:
 """
 from __future__ import annotations
 
+import functools
+
+import httpx
+import pytest
+
+from benchmarks.baselines.sequential import run_sequential
 from multi_agent_supervisor.llm import MockClient
 from multi_agent_supervisor.state import RetrievedDoc
 from multi_agent_supervisor.supervisor import build_supervisor
-from multi_agent_supervisor.tools.wikipedia import StaticSearcher
+from multi_agent_supervisor.tools.wikipedia import StaticSearcher, WikipediaSearcher
 
 PLANNER_RESPONSE = (
     '{"sub_questions": ['
@@ -175,3 +181,81 @@ class TestSupervisorEdgeCases:
         final_state = graph.invoke({"query": "Tell me about Inception."})
         assert len(final_state["sub_questions"]) == 1
         assert "Nolan" in final_state["final_answer"]
+
+
+def _wikipedia_handler(failure):
+    """MediaWiki stand-in: the composer query fails with `failure`, the rest succeed."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        if params.get("action") == "opensearch":
+            if "composed" in params["search"]:
+                return failure(request)
+            return httpx.Response(200, json=["q", ["Inception"], [], []])
+        return httpx.Response(
+            200,
+            json={"query": {"pages": {"1": {"title": "Inception", "extract": "2010 Nolan film."}}}},
+        )
+
+    return handler
+
+
+def _rate_limited(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(429, request=request)
+
+
+def _timed_out(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("timed out", request=request)
+
+
+@pytest.fixture
+def flaky_wikipedia(monkeypatch):
+    def install(failure):
+        transport = httpx.MockTransport(_wikipedia_handler(failure))
+        monkeypatch.setattr(httpx, "Client", functools.partial(httpx.Client, transport=transport))
+        return WikipediaSearcher()
+
+    return install
+
+
+class TestRetrievalFailures:
+    """One failed Wikipedia call must not abort the other branches."""
+
+    @pytest.mark.parametrize(
+        ("failure", "note"), [(_rate_limited, "HTTP 429"), (_timed_out, "ReadTimeout")]
+    )
+    def test_failed_branch_degrades_to_insufficient_evidence(self, flaky_wikipedia, failure, note):
+        llm = MockClient(
+            responses={
+                "User query": PLANNER_RESPONSE,
+                "Snippets:": ANALYZER_RESPONSE,
+                "Answer to verify": VERIFIER_RESPONSE,
+                "Sub-question results": SYNTH_RESPONSE,
+            }
+        )
+        graph = build_supervisor(llm, flaky_wikipedia(failure))
+        final_state = graph.invoke({"query": "Tell me about Inception."})
+
+        assert final_state["final_answer"]
+        by_text = {sq.text: sq.id for sq in final_state["sub_questions"]}
+        failed = by_text["Who composed the Inception score?"]
+        ok = by_text["Who directed Inception?"]
+        assert final_state["retrievals"][failed] == []
+        assert final_state["analyses"][failed].answer == "insufficient evidence"
+        assert [d.title for d in final_state["retrievals"][ok]] == ["Inception"]
+        notes = [e.note for e in final_state["telemetry"] if e.node == "retriever"]
+        assert f"sq={failed} docs=0 error={note}" in notes
+
+    def test_sequential_baseline_degrades_the_same_way(self, flaky_wikipedia):
+        llm = MockClient(
+            responses={
+                "User query": PLANNER_RESPONSE,
+                "Snippets:": ANALYZER_RESPONSE,
+                "Answer to verify": VERIFIER_RESPONSE,
+                "Sub-question results": SYNTH_RESPONSE,
+            }
+        )
+        result = run_sequential("Tell me about Inception.", llm, flaky_wikipedia(_rate_limited))
+        by_text = {sq.text: sq.id for sq in result.sub_questions}
+        assert result.retrievals[by_text["Who composed the Inception score?"]] == []
+        assert [d.title for d in result.retrievals[by_text["Who directed Inception?"]]] == ["Inception"]

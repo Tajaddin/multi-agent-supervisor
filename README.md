@@ -20,7 +20,7 @@ Two benchmarks, both reproducible:
 
 The smoke run is the theoretical ceiling: 4 sequential stages of 0.5s each. The live run shows what real-world latency variance does to the deal: per-question speedup ranges from 1.05x to 1.45x because each layer's slowest specialist becomes the bottleneck, and Claude's TTFT jitter is ~200-500ms.
 
-Both benchmarks confirm correctness parity: the supervisor and the sequential baseline call **identical specialist functions on identical state**. The 58-test suite includes `test_supervisor_faster_than_sequential_under_sleep`, which fails CI if the Send fan-out stops actually concurrent.
+Both benchmarks confirm correctness parity: the supervisor and the sequential baseline call **identical specialist functions on identical state**. The 61-test suite includes `test_supervisor_faster_than_sequential_under_sleep`, which fails CI if the Send fan-out stops actually concurrent.
 
 Live HotpotQA F1 on the 5-question subset was 0.036 (mean) with 20% contains-gold rate. Multi-hop accuracy is bounded by retrieval quality, not the orchestration; swap the `WikipediaSearcher` for Tavily / Brave Search to lift it. The orchestration speedup (1.31x) is independent of the retrieval backend.
 
@@ -189,12 +189,13 @@ pip install -e ".[dev]"
 pytest --cov=multi_agent_supervisor --cov-report=term-missing
 ```
 
-58 tests, 75% coverage. The key tests:
+61 tests, 83% coverage. The key tests:
 
 - `test_state.py::TestMergeDicts::test_simulates_parallel_specialist_writes` — proves the reducer is order-independent
 - `test_supervisor.py::TestSupervisorEndToEnd::test_retrievals_keyed_by_sub_question_id` — proves the graph does not clobber parallel writes
 - `test_supervisor.py::TestSupervisorEndToEnd::test_llm_invoked_for_every_specialist_layer` — pins the LLM-call budget at 1 + 2N + 1
 - `test_baselines.py::TestParallelismActuallyParallel::test_supervisor_faster_than_sequential_under_sleep` — fails if Send stops being concurrent
+- `test_supervisor.py::TestRetrievalFailures` — a Wikipedia 429 or timeout on one sub-question leaves that branch with no docs ("insufficient evidence") and a telemetry note; the other branches and the final answer still complete
 
 ## Docker
 

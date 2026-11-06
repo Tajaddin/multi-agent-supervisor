@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from multi_agent_supervisor.agents.analyzer import run_analyzer
 from multi_agent_supervisor.agents.planner import run_planner
-from multi_agent_supervisor.agents.retriever import run_retriever
+from multi_agent_supervisor.agents.retriever import retrieve_or_empty
 from multi_agent_supervisor.agents.synthesizer import run_synthesizer
 from multi_agent_supervisor.agents.verifier import run_verifier
 from multi_agent_supervisor.llm import LLMClient
@@ -55,7 +55,7 @@ def run_sequential(
 
     retrievals: dict[str, list[RetrievedDoc]] = {}
     for sq in sub_qs:
-        retrievals[sq.id] = run_retriever(sq, searcher, top_k=top_k)
+        retrievals[sq.id], _ = retrieve_or_empty(sq, searcher, top_k=top_k)
 
     analyses: dict[str, Analysis] = {}
     for sq in sub_qs:
