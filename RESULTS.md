@@ -39,8 +39,9 @@ Per-question records and the summary block land at `benchmarks/results/hotpotqa_
 ```json
 {
   "summary": {
-    "single":     {"n": 30, "f1_mean": 0.0, "em_mean": 0.0, "contains_gold_mean": 0.0,
-                   "latency_ms_mean": 0.0, "latency_ms_p50": 0.0, "latency_ms_max": 0.0},
+    "single":     {"n": 30, "n_failed": 0, "f1_mean": 0.0, "em_mean": 0.0,
+                   "contains_gold_mean": 0.0, "latency_ms_mean": 0.0, "latency_ms_p50": 0.0,
+                   "latency_ms_max": 0.0},
     "sequential": { ... same fields ... },
     "parallel":   { ... same fields ... }
   },
@@ -51,6 +52,8 @@ Per-question records and the summary block land at `benchmarks/results/hotpotqa_
   ]
 }
 ```
+
+A record that raised (`error`) or lost any Wikipedia search (`retrieval_errors`, sequential and parallel modes) is kept in `records` but left out of the summary and counted in `n_failed`. A degraded run is faster and scores lower, so averaging it in would skew both latency and F1. The script prints a warning when any record failed.
 
 ### What to expect
 

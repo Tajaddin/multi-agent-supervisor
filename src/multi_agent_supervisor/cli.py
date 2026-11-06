@@ -50,12 +50,23 @@ def main(argv: list[str] | None = None) -> int:
     final_state = graph.invoke({"query": args.query})
     elapsed = time.perf_counter() - start
 
+    errors = final_state.get("retrieval_errors", {}) or {}
+    if errors:
+        n_sub = len(final_state.get("sub_questions", []) or [])
+        detail = ", ".join(f"{sq_id}: {err}" for sq_id, err in sorted(errors.items()))
+        print(
+            f"warning: Wikipedia search failed for {len(errors)} of {n_sub} sub-questions"
+            f" ({detail}); those parts of the answer had no evidence.",
+            file=sys.stderr,
+        )
+
     if args.json:
         payload = {
             "query": args.query,
             "final_answer": final_state.get("final_answer", ""),
             "citations": [c.model_dump() for c in final_state.get("citations", []) or []],
             "sub_questions": [sq.model_dump() for sq in final_state.get("sub_questions", []) or []],
+            "retrieval_errors": errors,
             "elapsed_seconds": elapsed,
         }
         print(json.dumps(payload, indent=2))

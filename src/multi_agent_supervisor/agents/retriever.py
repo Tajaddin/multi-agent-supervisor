@@ -7,16 +7,21 @@ keeps the writes from clobbering each other.
 
 A search that fails over HTTP (timeout, 429, 5xx) yields no docs for that
 sub-question only. The analyzer then answers "insufficient evidence" for it and
-the other branches finish normally.
+the other branches finish normally. The failure is logged and recorded in
+state["retrieval_errors"][sub_question.id] so callers can tell a degraded run
+from a clean one.
 """
 from __future__ import annotations
 
+import logging
 import time
 
 import httpx
 
 from multi_agent_supervisor.state import RetrievedDoc, SubQuestion, TelemetryEvent
 from multi_agent_supervisor.tools.wikipedia import SearcherProtocol
+
+logger = logging.getLogger(__name__)
 
 
 def run_retriever(sub_question: SubQuestion, searcher: SearcherProtocol, top_k: int = 3) -> list[RetrievedDoc]:
@@ -31,9 +36,11 @@ def retrieve_or_empty(
     try:
         return run_retriever(sub_question, searcher, top_k=top_k), ""
     except httpx.HTTPStatusError as exc:
-        return [], f"HTTP {exc.response.status_code}"
+        error = f"HTTP {exc.response.status_code}"
     except httpx.HTTPError as exc:
-        return [], type(exc).__name__
+        error = type(exc).__name__
+    logger.warning("search failed for %s (%r): %s", sub_question.id, sub_question.text, error)
+    return [], error
 
 
 def build_retriever_node(searcher: SearcherProtocol, top_k: int = 3):
@@ -49,17 +56,11 @@ def build_retriever_node(searcher: SearcherProtocol, top_k: int = 3):
         docs, error = retrieve_or_empty(sub_q, searcher, top_k=top_k)
         elapsed = (time.perf_counter() - start) * 1000
         note = f"sq={sub_q.id} docs={len(docs)}"
+        update: dict = {"retrievals": {sub_q.id: docs}}
         if error:
             note += f" error={error}"
-        return {
-            "retrievals": {sub_q.id: docs},
-            "telemetry": [
-                TelemetryEvent(
-                    node="retriever",
-                    elapsed_ms=elapsed,
-                    note=note,
-                )
-            ],
-        }
+            update["retrieval_errors"] = {sub_q.id: error}
+        update["telemetry"] = [TelemetryEvent(node="retriever", elapsed_ms=elapsed, note=note)]
+        return update
 
     return retriever_node

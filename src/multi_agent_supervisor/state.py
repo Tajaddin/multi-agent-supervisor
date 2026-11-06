@@ -100,6 +100,7 @@ class SupervisorState(TypedDict, total=False):
     sub_questions: list[SubQuestion]
 
     retrievals: Annotated[dict[str, list[RetrievedDoc]], merge_dicts]
+    retrieval_errors: Annotated[dict[str, str], merge_dicts]
     analyses: Annotated[dict[str, Analysis], merge_dicts]
     verifications: Annotated[dict[str, Verification], merge_dicts]
 
