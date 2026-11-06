@@ -57,7 +57,7 @@ A record that raised (`error`) or lost any Wikipedia search (`retrieval_errors`,
 
 ### What to expect
 
-The hero claim is "1.99x parallel vs sequential" on Haiku-4.5-shaped latency. On real Haiku 4.5, individual LLM call latencies vary, which usually pushes the parallel speedup higher than the deterministic case (the sequential baseline pays the worst-case latency at every step; parallel pays it once per layer).
+The smoke benchmark's 1.99x is the ceiling for this graph: three sub-questions, a fixed 0.5s per LLM call, and nothing else on the clock. The one live run on Haiku 4.5 (5 questions, `--modes sequential parallel`) measured 1.31x, with per-question speedups from 1.05x to 1.45x, because each parallel layer waits for its slowest call.
 
 F1 and EM should be approximately equal between sequential and parallel because they run the same specialists on the same state. Any gap would mean the parallel pattern lost information through the reducer.
 
