@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "multi-agent-supervisor"
 version = "0.1.0"
-description = "LangGraph supervisor with parallel specialist agents. Hero: 2.4x speedup vs sequential on HotpotQA multi-hop, +F1 over single-prompt."
+description = "LangGraph supervisor with parallel specialist agents. 1.31x faster than sequential on 5 live HotpotQA questions (Haiku 4.5), 1.99x on the deterministic smoke benchmark."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

@@ -5,7 +5,7 @@
 [![ci](https://github.com/Tajaddin/multi-agent-supervisor/actions/workflows/ci.yml/badge.svg)](https://github.com/Tajaddin/multi-agent-supervisor/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
-[![Coverage](https://img.shields.io/badge/coverage-75%25-brightgreen)](#testing)
+[![Coverage](https://img.shields.io/badge/coverage-89%25-brightgreen)](#testing)
 
 ## Hero metrics
 
@@ -20,7 +20,7 @@ Two benchmarks, both reproducible:
 
 The smoke run is the theoretical ceiling: 4 sequential stages of 0.5s each. The live run shows what real-world latency variance does to the deal: per-question speedup ranges from 1.05x to 1.45x because each layer's slowest specialist becomes the bottleneck, and Claude's TTFT jitter is ~200-500ms.
 
-Both benchmarks confirm correctness parity: the supervisor and the sequential baseline call **identical specialist functions on identical state**. The 58-test suite includes `test_supervisor_faster_than_sequential_under_sleep`, which fails CI if the Send fan-out stops actually concurrent.
+Both benchmarks confirm correctness parity: the supervisor and the sequential baseline call **identical specialist functions on identical state**. The 65-test suite includes `test_supervisor_faster_than_sequential_under_sleep`, which fails CI if the Send fan-out stops actually concurrent.
 
 Live HotpotQA F1 on the 5-question subset was 0.036 (mean) with 20% contains-gold rate. Multi-hop accuracy is bounded by retrieval quality, not the orchestration; swap the `WikipediaSearcher` for Tavily / Brave Search to lift it. The orchestration speedup (1.31x) is independent of the retrieval backend.
 
@@ -171,9 +171,10 @@ class SupervisorState(TypedDict, total=False):
     query: str
     sub_questions: list[SubQuestion]
 
-    retrievals:    Annotated[dict[str, list[RetrievedDoc]], merge_dicts]
-    analyses:      Annotated[dict[str, Analysis],           merge_dicts]
-    verifications: Annotated[dict[str, Verification],       merge_dicts]
+    retrievals:       Annotated[dict[str, list[RetrievedDoc]], merge_dicts]
+    retrieval_errors: Annotated[dict[str, str],                merge_dicts]
+    analyses:         Annotated[dict[str, Analysis],           merge_dicts]
+    verifications:    Annotated[dict[str, Verification],       merge_dicts]
 
     final_answer: str
     citations:    list[Citation]
@@ -189,12 +190,13 @@ pip install -e ".[dev]"
 pytest --cov=multi_agent_supervisor --cov-report=term-missing
 ```
 
-58 tests, 75% coverage. The key tests:
+65 tests, 89% coverage. The key tests:
 
 - `test_state.py::TestMergeDicts::test_simulates_parallel_specialist_writes` — proves the reducer is order-independent
 - `test_supervisor.py::TestSupervisorEndToEnd::test_retrievals_keyed_by_sub_question_id` — proves the graph does not clobber parallel writes
 - `test_supervisor.py::TestSupervisorEndToEnd::test_llm_invoked_for_every_specialist_layer` — pins the LLM-call budget at 1 + 2N + 1
 - `test_baselines.py::TestParallelismActuallyParallel::test_supervisor_faster_than_sequential_under_sleep` — fails if Send stops being concurrent
+- `test_supervisor.py::TestRetrievalFailures` — a Wikipedia 429 or timeout on one sub-question leaves that branch with no docs ("insufficient evidence"); the other branches and the final answer still complete. The failure is logged, recorded in `retrieval_errors`, printed as a warning by `mas`, and the HotpotQA benchmark leaves that record out of its summary (`n_failed`) instead of averaging a degraded run into the latency and F1
 
 ## Docker
 

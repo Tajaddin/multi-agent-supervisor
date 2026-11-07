@@ -10,10 +10,19 @@ StaticSearcher. They prove:
 """
 from __future__ import annotations
 
+import functools
+import json
+
+import httpx
+import pytest
+
+from benchmarks.baselines.sequential import run_sequential
+from benchmarks.hotpotqa_eval import QAItem, aggregate, run_one, score_record
+from multi_agent_supervisor import cli
 from multi_agent_supervisor.llm import MockClient
 from multi_agent_supervisor.state import RetrievedDoc
 from multi_agent_supervisor.supervisor import build_supervisor
-from multi_agent_supervisor.tools.wikipedia import StaticSearcher
+from multi_agent_supervisor.tools.wikipedia import StaticSearcher, WikipediaSearcher
 
 PLANNER_RESPONSE = (
     '{"sub_questions": ['
@@ -175,3 +184,115 @@ class TestSupervisorEdgeCases:
         final_state = graph.invoke({"query": "Tell me about Inception."})
         assert len(final_state["sub_questions"]) == 1
         assert "Nolan" in final_state["final_answer"]
+
+
+def _wikipedia_handler(failure):
+    """MediaWiki stand-in: the composer query fails with `failure`, the rest succeed."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = request.url.params
+        if params.get("action") == "opensearch":
+            if "composed" in params["search"]:
+                return failure(request)
+            return httpx.Response(200, json=["q", ["Inception"], [], []])
+        return httpx.Response(
+            200,
+            json={"query": {"pages": {"1": {"title": "Inception", "extract": "2010 Nolan film."}}}},
+        )
+
+    return handler
+
+
+def _rate_limited(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(429, request=request)
+
+
+def _timed_out(request: httpx.Request) -> httpx.Response:
+    raise httpx.ReadTimeout("timed out", request=request)
+
+
+@pytest.fixture
+def flaky_wikipedia(monkeypatch):
+    def install(failure):
+        transport = httpx.MockTransport(_wikipedia_handler(failure))
+        monkeypatch.setattr(httpx, "Client", functools.partial(httpx.Client, transport=transport))
+        return WikipediaSearcher()
+
+    return install
+
+
+def _scripted_llm() -> MockClient:
+    return MockClient(
+        responses={
+            "User query": PLANNER_RESPONSE,
+            "Snippets:": ANALYZER_RESPONSE,
+            "Answer to verify": VERIFIER_RESPONSE,
+            "Sub-question results": SYNTH_RESPONSE,
+        }
+    )
+
+
+class TestRetrievalFailures:
+    """One failed Wikipedia call must not abort the other branches, and must not go unnoticed."""
+
+    @pytest.mark.parametrize(
+        ("failure", "note"), [(_rate_limited, "HTTP 429"), (_timed_out, "ReadTimeout")]
+    )
+    def test_failed_branch_degrades_to_insufficient_evidence(
+        self, flaky_wikipedia, caplog, failure, note
+    ):
+        graph = build_supervisor(_scripted_llm(), flaky_wikipedia(failure))
+        final_state = graph.invoke({"query": "Tell me about Inception."})
+
+        assert final_state["final_answer"]
+        by_text = {sq.text: sq.id for sq in final_state["sub_questions"]}
+        failed = by_text["Who composed the Inception score?"]
+        ok = by_text["Who directed Inception?"]
+        assert final_state["retrievals"][failed] == []
+        assert final_state["analyses"][failed].answer == "insufficient evidence"
+        assert [d.title for d in final_state["retrievals"][ok]] == ["Inception"]
+        assert final_state["retrieval_errors"] == {failed: note}
+        notes = [e.note for e in final_state["telemetry"] if e.node == "retriever"]
+        assert f"sq={failed} docs=0 error={note}" in notes
+        assert f"search failed for {failed}" in caplog.text
+
+    def test_sequential_baseline_degrades_the_same_way(self, flaky_wikipedia):
+        result = run_sequential(
+            "Tell me about Inception.", _scripted_llm(), flaky_wikipedia(_rate_limited)
+        )
+        by_text = {sq.text: sq.id for sq in result.sub_questions}
+        failed = by_text["Who composed the Inception score?"]
+        assert result.retrievals[failed] == []
+        assert [d.title for d in result.retrievals[by_text["Who directed Inception?"]]] == ["Inception"]
+        assert result.retrieval_errors == {failed: "HTTP 429"}
+
+    @pytest.mark.parametrize("mode", ["sequential", "parallel"])
+    def test_benchmark_record_carries_the_error(self, flaky_wikipedia, mode):
+        item = QAItem(question="Tell me about Inception.", answer="Christopher Nolan", qid="q1")
+        rec = run_one(mode, item, _scripted_llm(), flaky_wikipedia(_rate_limited))
+        assert list(rec["retrieval_errors"].values()) == ["HTTP 429"]
+
+        summary = aggregate([score_record(rec)])
+        assert summary == {"n": 0, "n_failed": 1}
+
+    def test_aggregate_scores_only_clean_records(self):
+        clean = {"f1": 1.0, "em": 1.0, "contains_gold": 1.0, "latency_ms": 100.0}
+        raised = {"f1": 0.0, "em": 0.0, "contains_gold": 0.0, "latency_ms": 0.0, "error": "boom"}
+        degraded = {**clean, "latency_ms": 10.0, "retrieval_errors": {"sq-02": "HTTP 429"}}
+
+        summary = aggregate([clean, raised, degraded])
+
+        assert summary["n"] == 1
+        assert summary["n_failed"] == 2
+        assert summary["f1_mean"] == 1.0
+        assert summary["latency_ms_mean"] == 100.0
+
+    def test_cli_warns_when_a_search_failed(self, flaky_wikipedia, monkeypatch, capsys):
+        flaky_wikipedia(_rate_limited)
+        monkeypatch.setattr(cli, "AnthropicClient", lambda model: _scripted_llm())
+
+        assert cli.main(["Tell me about Inception.", "--json"]) == 0
+
+        out, err = capsys.readouterr()
+        assert "Wikipedia search failed for 1 of 2 sub-questions" in err
+        assert list(json.loads(out)["retrieval_errors"].values()) == ["HTTP 429"]

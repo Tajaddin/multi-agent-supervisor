@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 from multi_agent_supervisor.agents.analyzer import run_analyzer
 from multi_agent_supervisor.agents.planner import run_planner
-from multi_agent_supervisor.agents.retriever import run_retriever
+from multi_agent_supervisor.agents.retriever import retrieve_or_empty
 from multi_agent_supervisor.agents.synthesizer import run_synthesizer
 from multi_agent_supervisor.agents.verifier import run_verifier
 from multi_agent_supervisor.llm import LLMClient
@@ -36,6 +36,7 @@ class SequentialResult:
     latency_ms: float
     sub_questions: list[SubQuestion]
     retrievals: dict[str, list[RetrievedDoc]] = field(default_factory=dict)
+    retrieval_errors: dict[str, str] = field(default_factory=dict)
     analyses: dict[str, Analysis] = field(default_factory=dict)
     verifications: dict[str, Verification] = field(default_factory=dict)
 
@@ -54,8 +55,11 @@ def run_sequential(
     sub_qs = run_planner(query, llm, max_sub_questions=max_sub_questions)
 
     retrievals: dict[str, list[RetrievedDoc]] = {}
+    retrieval_errors: dict[str, str] = {}
     for sq in sub_qs:
-        retrievals[sq.id] = run_retriever(sq, searcher, top_k=top_k)
+        retrievals[sq.id], error = retrieve_or_empty(sq, searcher, top_k=top_k)
+        if error:
+            retrieval_errors[sq.id] = error
 
     analyses: dict[str, Analysis] = {}
     for sq in sub_qs:
@@ -76,6 +80,7 @@ def run_sequential(
         latency_ms=latency_ms,
         sub_questions=sub_qs,
         retrievals=retrievals,
+        retrieval_errors=retrieval_errors,
         analyses=analyses,
         verifications=verifications,
     )

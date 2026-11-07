@@ -12,7 +12,11 @@ COPY src ./src
 COPY benchmarks ./benchmarks
 COPY README.md LICENSE ./
 
-RUN pip install --no-cache-dir -e .
+RUN pip install --no-cache-dir -e . \
+    && useradd --create-home --uid 10001 app \
+    && chown -R app:app /app/benchmarks/results
+
+USER app
 
 # Smoke benchmark needs no API key and runs in under 10s. Useful as a healthcheck.
 HEALTHCHECK --interval=30s --timeout=15s --start-period=5s --retries=2 \

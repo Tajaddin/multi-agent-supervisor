@@ -133,6 +133,7 @@ def run_one(
             "latency_ms": result.latency_ms,
             "citations": [c.title for c in result.citations],
             "n_sub_questions": len(result.sub_questions),
+            "retrieval_errors": result.retrieval_errors,
         }
     if mode == "parallel":
         graph = build_supervisor(llm, searcher)
@@ -148,6 +149,7 @@ def run_one(
             "latency_ms": elapsed,
             "citations": [c.title for c in state.get("citations", []) or []],
             "n_sub_questions": len(state.get("sub_questions", []) or []),
+            "retrieval_errors": state.get("retrieval_errors", {}) or {},
         }
     raise ValueError(f"unknown mode: {mode}")
 
@@ -159,18 +161,30 @@ def score_record(rec: dict[str, Any]) -> dict[str, Any]:
     return rec
 
 
+def is_failed(rec: dict[str, Any]) -> bool:
+    """True if the run raised or any retrieval failed: its latency and F1 are not comparable."""
+    return bool(rec.get("error") or rec.get("retrieval_errors"))
+
+
 def aggregate(records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize one mode over the records that ran cleanly; failed ones are only counted."""
     if not records:
         return {}
-    return {
-        "n": len(records),
-        "f1_mean": sum(r["f1"] for r in records) / len(records),
-        "em_mean": sum(r["em"] for r in records) / len(records),
-        "contains_gold_mean": sum(r["contains_gold"] for r in records) / len(records),
-        "latency_ms_mean": sum(r["latency_ms"] for r in records) / len(records),
-        "latency_ms_p50": sorted(r["latency_ms"] for r in records)[len(records) // 2],
-        "latency_ms_max": max(r["latency_ms"] for r in records),
-    }
+    scored = [r for r in records if not is_failed(r)]
+    summary: dict[str, Any] = {"n": len(scored), "n_failed": len(records) - len(scored)}
+    if not scored:
+        return summary
+    summary.update(
+        {
+            "f1_mean": sum(r["f1"] for r in scored) / len(scored),
+            "em_mean": sum(r["em"] for r in scored) / len(scored),
+            "contains_gold_mean": sum(r["contains_gold"] for r in scored) / len(scored),
+            "latency_ms_mean": sum(r["latency_ms"] for r in scored) / len(scored),
+            "latency_ms_p50": sorted(r["latency_ms"] for r in scored)[len(scored) // 2],
+            "latency_ms_max": max(r["latency_ms"] for r in scored),
+        }
+    )
+    return summary
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -234,10 +248,18 @@ def main(argv: list[str] | None = None) -> int:
     print("\n=== Summary ===")
     print(json.dumps(summary, indent=2))
 
+    n_failed = sum(1 for r in all_records if is_failed(r))
+    if n_failed:
+        print(
+            f"\nwarning: {n_failed} record(s) failed (see 'error' / 'retrieval_errors') and are"
+            " left out of the summary, so modes may be averaged over different questions.",
+            file=sys.stderr,
+        )
+
     if "sequential" in summary and "parallel" in summary:
-        seq_lat = summary["sequential"]["latency_ms_mean"]
-        par_lat = summary["parallel"]["latency_ms_mean"]
-        if par_lat > 0:
+        seq_lat = summary["sequential"].get("latency_ms_mean", 0.0)
+        par_lat = summary["parallel"].get("latency_ms_mean", 0.0)
+        if seq_lat > 0 and par_lat > 0:
             print(f"\nSpeedup parallel vs sequential: {seq_lat / par_lat:.2f}x")
 
     return 0
